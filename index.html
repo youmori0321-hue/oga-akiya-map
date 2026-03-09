@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>男鹿市 空き家マップ</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Helvetica Neue', 'Hiragino Sans', 'Yu Gothic', sans-serif; background: #f0f0f0; color: #333; }
+
+  #map { width: 100%; height: 100vh; z-index: 1; }
+
+  /* ヘッダー */
+  #header {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+    background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px);
+    padding: 12px 24px; display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid #ddd; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+  #header h1 { font-size: 18px; font-weight: 600; color: #333; letter-spacing: 1px; }
+  #header h1 span { color: #d63031; }
+  .header-stats { display: flex; gap: 20px; font-size: 13px; color: #777; }
+  .header-stats .stat-num { color: #d63031; font-weight: 700; font-size: 16px; }
+
+  /* ツールバー */
+  #toolbar {
+    position: fixed; top: 56px; left: 16px; z-index: 1000;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .tool-btn {
+    width: 44px; height: 44px; border-radius: 10px; border: none;
+    background: rgba(255, 255, 255, 0.95); color: #555; font-size: 20px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  }
+  .tool-btn:hover { background: #fff; color: #333; transform: scale(1.05); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+  .tool-btn.active { background: #d63031; color: #fff; }
+
+  /* サイドパネル */
+  #side-panel {
+    position: fixed; top: 56px; right: 0; bottom: 0; width: 420px; z-index: 999;
+    background: rgba(255, 255, 255, 0.97); backdrop-filter: blur(12px);
+    border-left: 1px solid #ddd; overflow-y: auto;
+    transform: translateX(100%); transition: transform 0.3s ease;
+    box-shadow: -2px 0 12px rgba(0,0,0,0.08);
+  }
+  #side-panel.open { transform: translateX(0); }
+
+  .panel-header {
+    padding: 20px 24px; border-bottom: 1px solid #eee;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .panel-header h2 { font-size: 16px; font-weight: 600; color: #333; }
+  .panel-close {
+    width: 32px; height: 32px; border-radius: 8px; border: none;
+    background: #eee; color: #888; font-size: 18px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .panel-close:hover { background: #ddd; color: #333; }
+
+  .panel-body { padding: 20px 24px; }
+
+  /* フォーム */
+  .form-group { margin-bottom: 20px; }
+  .form-group label {
+    display: block; font-size: 12px; font-weight: 600;
+    color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .form-group input, .form-group textarea, .form-group select {
+    width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid #ccc;
+    background: #f8f8f8; color: #333; font-size: 14px; outline: none;
+    transition: border-color 0.2s;
+  }
+  .form-group input:focus, .form-group textarea:focus, .form-group select:focus {
+    border-color: #d63031; background: #fff;
+  }
+  .form-group textarea { resize: vertical; min-height: 80px; }
+
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  /* ボタン */
+  .btn {
+    padding: 10px 20px; border-radius: 8px; border: none; font-size: 14px;
+    font-weight: 600; cursor: pointer; transition: all 0.2s;
+  }
+  .btn-primary { background: #d63031; color: #fff; }
+  .btn-primary:hover { background: #c0392b; }
+  .btn-secondary { background: #e8e8e8; color: #555; }
+  .btn-secondary:hover { background: #ddd; color: #333; }
+  .btn-danger { background: transparent; color: #d63031; border: 1px solid #d63031; }
+  .btn-danger:hover { background: #d63031; color: #fff; }
+  .btn-block { width: 100%; }
+
+  .btn-group { display: flex; gap: 10px; margin-top: 24px; }
+
+  /* 物件カード */
+  .property-card {
+    background: #f5f5f5; border-radius: 12px; padding: 16px;
+    margin-bottom: 12px; cursor: pointer; transition: all 0.2s;
+    border: 1px solid #e8e8e8;
+  }
+  .property-card:hover { border-color: #ccc; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+  .property-card .card-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px; }
+  .property-card .card-title { font-size: 15px; font-weight: 600; color: #333; }
+  .property-card .card-badge {
+    font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 600;
+  }
+  .badge-akiya { background: rgba(214, 48, 49, 0.12); color: #d63031; }
+  .badge-active { background: rgba(0, 184, 148, 0.12); color: #00b894; }
+  .property-card .card-address { font-size: 13px; color: #888; margin-bottom: 6px; }
+  .property-card .card-meta { font-size: 12px; color: #aaa; }
+
+  /* 詳細ビュー */
+  .detail-section { margin-bottom: 24px; }
+  .detail-section h3 {
+    font-size: 13px; font-weight: 600; color: #999;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #eee;
+  }
+  .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+  .detail-label { font-size: 13px; color: #888; }
+  .detail-value { font-size: 13px; color: #333; font-weight: 500; }
+
+  .file-list { list-style: none; }
+  .file-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; background: #f5f5f5; border-radius: 8px;
+    margin-bottom: 8px; transition: all 0.2s;
+  }
+  .file-item:hover { background: #eee; }
+  .file-icon { font-size: 20px; }
+  .file-info { flex: 1; }
+  .file-name { font-size: 13px; color: #333; font-weight: 500; }
+  .file-type { font-size: 11px; color: #aaa; }
+  .file-link {
+    color: #2980b9; text-decoration: none; font-size: 12px; font-weight: 600;
+  }
+  .file-link:hover { text-decoration: underline; }
+  .file-remove {
+    background: none; border: none; color: #bbb; cursor: pointer; font-size: 16px;
+  }
+  .file-remove:hover { color: #d63031; }
+
+  /* 空き家詳細フォーム（条件表示） */
+  .akiya-details {
+    background: rgba(214, 48, 49, 0.04); border: 1px solid rgba(214, 48, 49, 0.15);
+    border-radius: 10px; padding: 16px; margin-top: 12px;
+  }
+  .akiya-details h4 {
+    font-size: 13px; color: #d63031; font-weight: 600; margin-bottom: 12px;
+  }
+
+  /* 検索バー */
+  #search-bar {
+    position: fixed; top: 56px; left: 70px; z-index: 1000;
+    width: 300px;
+  }
+  #search-input {
+    width: 100%; padding: 10px 14px 10px 38px; border-radius: 10px;
+    border: 1px solid #ccc; background: rgba(255, 255, 255, 0.95);
+    color: #333; font-size: 14px; outline: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  }
+  #search-input:focus { border-color: #d63031; }
+  .search-icon {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    color: #999; font-size: 16px;
+  }
+
+  /* トースト通知 */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #fff; color: #333; padding: 12px 24px;
+    border-radius: 10px; font-size: 14px; z-index: 2000;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15); border: 1px solid #ddd;
+    opacity: 0; transition: opacity 0.3s;
+  }
+  .toast.show { opacity: 1; }
+
+  /* レスポンシブ */
+  @media (max-width: 768px) {
+    #side-panel { width: 100%; }
+    #search-bar { width: calc(100% - 90px); }
+  }
+
+  /* カスタムマーカー */
+  .custom-marker {
+    width: 28px; height: 28px; border-radius: 50%; border: 3px solid #fff;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25); transition: transform 0.2s;
+  }
+  .custom-marker:hover { transform: scale(1.2); }
+  .marker-akiya { background: #d63031; }
+  .marker-normal { background: #95a5a6; }
+
+  /* 凡例 */
+  #legend {
+    position: fixed; bottom: 24px; left: 16px; z-index: 1000;
+    background: rgba(255, 255, 255, 0.95); border-radius: 10px;
+    padding: 12px 16px; font-size: 12px; color: #555;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1); border: 1px solid #ddd;
+  }
+  .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .legend-item:last-child { margin-bottom: 0; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+</style>
+</head>
+<body>
+
+<!-- ヘッダー -->
+<div id="header">
+  <h1>🏚 男鹿市 <span>空き家</span>マップ</h1>
+  <div class="header-stats">
+    <div>登録物件 <span class="stat-num" id="stat-total">0</span></div>
+    <div>空き家 <span class="stat-num" id="stat-akiya">0</span></div>
+  </div>
+</div>
+
+<!-- ツールバー -->
+<div id="toolbar">
+  <button class="tool-btn" id="btn-add" title="物件を追加（地図をクリック）">＋</button>
+  <button class="tool-btn" id="btn-list" title="物件一覧">☰</button>
+  <button class="tool-btn" id="btn-export" title="データエクスポート">⬇</button>
+  <button class="tool-btn" id="btn-import" title="データインポート">⬆</button>
+</div>
+
+<!-- 検索バー -->
+<div id="search-bar">
+  <span class="search-icon">🔍</span>
+  <input type="text" id="search-input" placeholder="住所・名前で検索...">
+</div>
+
+<!-- 凡例 -->
+<div id="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#d63031;"></div> 空き家</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#95a5a6;"></div> 非空き家</div>
+</div>
+
+<!-- 地図 -->
+<div id="map"></div>
+
+<!-- サイドパネル -->
+<div id="side-panel">
+  <!-- 動的にコンテンツが入る -->
+</div>
+
+<!-- トースト -->
+<div class="toast" id="toast"></div>
+
+<!-- インポート用hidden input -->
+<input type="file" id="import-file" accept=".json" style="display:none;">
+
+<script>
+// ============================================================
+// データストア
+// ============================================================
+const STORAGE_KEY = 'oga_akiya_map_data';
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveData(properties) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(properties));
+}
+
+let properties = loadData();
+let markers = {};
+let addMode = false;
+let editingId = null;
+
+// ============================================================
+// 地図初期化（男鹿駅付近）
+// ============================================================
+const map = L.map('map', {
+  center: [39.8867, 139.8481],
+  zoom: 15,
+  zoomControl: false
+});
+
+// グレースケールタイル
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+  subdomains: 'abcd',
+  maxZoom: 19
+}).addTo(map);
+
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+// ============================================================
+// マーカー管理
+// ============================================================
+function createMarkerIcon(isAkiya) {
+  return L.divIcon({
+    className: '',
+    html: `<div class="custom-marker ${isAkiya ? 'marker-akiya' : 'marker-normal'}"></div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -14]
+  });
+}
+
+function addMarker(prop) {
+  if (markers[prop.id]) {
+    map.removeLayer(markers[prop.id]);
+  }
+  const marker = L.marker([prop.lat, prop.lng], {
+    icon: createMarkerIcon(prop.isAkiya)
+  }).addTo(map);
+
+  marker.on('click', () => showDetail(prop.id));
+  markers[prop.id] = marker;
+}
+
+function renderAllMarkers() {
+  Object.values(markers).forEach(m => map.removeLayer(m));
+  markers = {};
+  properties.forEach(p => addMarker(p));
+  updateStats();
+}
+
+function updateStats() {
+  document.getElementById('stat-total').textContent = properties.length;
+  document.getElementById('stat-akiya').textContent = properties.filter(p => p.isAkiya).length;
+}
+
+// ============================================================
+// パネル制御
+// ============================================================
+const panel = document.getElementById('side-panel');
+
+function openPanel(html) {
+  panel.innerHTML = html;
+  panel.classList.add('open');
+}
+
+function closePanel() {
+  panel.classList.remove('open');
+  editingId = null;
+}
+
+// ============================================================
+// 物件追加フォーム
+// ============================================================
+function showAddForm(lat, lng) {
+  const html = `
+    <div class="panel-header">
+      <h2>📍 新規物件登録</h2>
+      <button class="panel-close" onclick="closePanel()">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="form-group">
+        <label>物件名称</label>
+        <input type="text" id="f-name" placeholder="例：山田邸">
+      </div>
+      <div class="form-group">
+        <label>住所</label>
+        <input type="text" id="f-address" placeholder="例：男鹿市船川港船川字...">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>緯度</label>
+          <input type="text" id="f-lat" value="${lat.toFixed(6)}" readonly style="color:#999;">
+        </div>
+        <div class="form-group">
+          <label>経度</label>
+          <input type="text" id="f-lng" value="${lng.toFixed(6)}" readonly style="color:#999;">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>空き家ですか？</label>
+        <select id="f-isAkiya" onchange="toggleAkiyaDetails()">
+          <option value="1">はい（空き家）</option>
+          <option value="0">いいえ</option>
+        </select>
+      </div>
+      <div id="akiya-detail-section" class="akiya-details">
+        <h4>🏚 空き家 詳細情報</h4>
+        <div class="form-group">
+          <label>空き家の状態</label>
+          <select id="f-condition">
+            <option value="">選択してください</option>
+            <option value="良好">良好（すぐに利用可能）</option>
+            <option value="要修繕">要修繕（軽微な修繕が必要）</option>
+            <option value="老朽化">老朽化（大規模修繕が必要）</option>
+            <option value="危険">危険（倒壊の恐れあり）</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>空き家になった時期（おおよそ）</label>
+          <input type="text" id="f-vacantSince" placeholder="例：2020年頃">
+        </div>
+        <div class="form-group">
+          <label>建物構造</label>
+          <select id="f-structure">
+            <option value="">選択してください</option>
+            <option value="木造">木造</option>
+            <option value="鉄骨造">鉄骨造</option>
+            <option value="RC造">RC造</option>
+            <option value="その他">その他</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>築年数（おおよそ）</label>
+          <input type="text" id="f-builtYear" placeholder="例：1985年築">
+        </div>
+        <div class="form-group">
+          <label>土地面積</label>
+          <input type="text" id="f-landArea" placeholder="例：200㎡">
+        </div>
+        <div class="form-group">
+          <label>建物面積</label>
+          <input type="text" id="f-buildingArea" placeholder="例：120㎡">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>所有者名</label>
+        <input type="text" id="f-owner" placeholder="例：山田太郎">
+      </div>
+      <div class="form-group">
+        <label>所有者連絡先</label>
+        <input type="text" id="f-ownerContact" placeholder="例：090-XXXX-XXXX">
+      </div>
+      <div class="form-group">
+        <label>備考</label>
+        <textarea id="f-notes" placeholder="その他の情報..."></textarea>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary btn-block" onclick="saveProperty()">登録する</button>
+        <button class="btn btn-secondary" onclick="closePanel(); setAddMode(false);">キャンセル</button>
+      </div>
+    </div>
+  `;
+  openPanel(html);
+}
+
+function toggleAkiyaDetails() {
+  const isAkiya = document.getElementById('f-isAkiya').value === '1';
+  const section = document.getElementById('akiya-detail-section');
+  if (section) section.style.display = isAkiya ? 'block' : 'none';
+}
+
+// ============================================================
+// 物件保存
+// ============================================================
+function saveProperty() {
+  const name = document.getElementById('f-name').value.trim();
+  const address = document.getElementById('f-address').value.trim();
+  if (!name && !address) {
+    showToast('物件名称または住所を入力してください');
+    return;
+  }
+
+  const isAkiya = document.getElementById('f-isAkiya').value === '1';
+
+  const prop = {
+    id: editingId || Date.now().toString(),
+    name: name,
+    address: address,
+    lat: parseFloat(document.getElementById('f-lat').value),
+    lng: parseFloat(document.getElementById('f-lng').value),
+    isAkiya: isAkiya,
+    condition: isAkiya ? (document.getElementById('f-condition')?.value || '') : '',
+    vacantSince: isAkiya ? (document.getElementById('f-vacantSince')?.value || '') : '',
+    structure: isAkiya ? (document.getElementById('f-structure')?.value || '') : '',
+    builtYear: isAkiya ? (document.getElementById('f-builtYear')?.value || '') : '',
+    landArea: isAkiya ? (document.getElementById('f-landArea')?.value || '') : '',
+    buildingArea: isAkiya ? (document.getElementById('f-buildingArea')?.value || '') : '',
+    owner: document.getElementById('f-owner').value.trim(),
+    ownerContact: document.getElementById('f-ownerContact').value.trim(),
+    notes: document.getElementById('f-notes').value.trim(),
+    files: editingId ? (properties.find(p => p.id === editingId)?.files || []) : [],
+    createdAt: editingId ? (properties.find(p => p.id === editingId)?.createdAt || new Date().toISOString()) : new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  if (editingId) {
+    const idx = properties.findIndex(p => p.id === editingId);
+    if (idx >= 0) properties[idx] = prop;
+  } else {
+    properties.push(prop);
+  }
+
+  saveData(properties);
+  renderAllMarkers();
+  showDetail(prop.id);
+  setAddMode(false);
+  showToast(editingId ? '物件情報を更新しました' : '物件を登録しました');
+  editingId = null;
+}
+
+// ============================================================
+// 物件詳細表示
+// ============================================================
+function showDetail(id) {
+  const prop = properties.find(p => p.id === id);
+  if (!prop) return;
+
+  const filesHtml = prop.files && prop.files.length > 0
+    ? prop.files.map((f, i) => `
+        <div class="file-item">
+          <span class="file-icon">📄</span>
+          <div class="file-info">
+            <div class="file-name">${escHtml(f.name)}</div>
+            <div class="file-type">${escHtml(f.type || 'ファイル')}</div>
+          </div>
+          <a href="${escHtml(f.url)}" target="_blank" class="file-link">開く ↗</a>
+          <button class="file-remove" onclick="removeFile('${prop.id}', ${i})" title="削除">✕</button>
+        </div>
+      `).join('')
+    : '<p style="color:#999; font-size:13px;">登録されたファイルはありません</p>';
+
+  const akiyaInfo = prop.isAkiya ? `
+    <div class="detail-section">
+      <h3>🏚 空き家情報</h3>
+      ${prop.condition ? `<div class="detail-row"><span class="detail-label">状態</span><span class="detail-value">${escHtml(prop.condition)}</span></div>` : ''}
+      ${prop.vacantSince ? `<div class="detail-row"><span class="detail-label">空き家時期</span><span class="detail-value">${escHtml(prop.vacantSince)}</span></div>` : ''}
+      ${prop.structure ? `<div class="detail-row"><span class="detail-label">構造</span><span class="detail-value">${escHtml(prop.structure)}</span></div>` : ''}
+      ${prop.builtYear ? `<div class="detail-row"><span class="detail-label">築年</span><span class="detail-value">${escHtml(prop.builtYear)}</span></div>` : ''}
+      ${prop.landArea ? `<div class="detail-row"><span class="detail-label">土地面積</span><span class="detail-value">${escHtml(prop.landArea)}</span></div>` : ''}
+      ${prop.buildingArea ? `<div class="detail-row"><span class="detail-label">建物面積</span><span class="detail-value">${escHtml(prop.buildingArea)}</span></div>` : ''}
+    </div>
+  ` : '';
+
+  const html = `
+    <div class="panel-header">
+      <h2>${prop.isAkiya ? '🏚' : '🏠'} ${escHtml(prop.name || '名称未設定')}</h2>
+      <button class="panel-close" onclick="closePanel()">✕</button>
+    </div>
+    <div class="panel-body">
+      <div style="margin-bottom:16px;">
+        <span class="card-badge ${prop.isAkiya ? 'badge-akiya' : 'badge-active'}">
+          ${prop.isAkiya ? '空き家' : '非空き家'}
+        </span>
+      </div>
+
+      <div class="detail-section">
+        <h3>📍 基本情報</h3>
+        ${prop.address ? `<div class="detail-row"><span class="detail-label">住所</span><span class="detail-value">${escHtml(prop.address)}</span></div>` : ''}
+        <div class="detail-row"><span class="detail-label">座標</span><span class="detail-value">${prop.lat.toFixed(6)}, ${prop.lng.toFixed(6)}</span></div>
+        ${prop.owner ? `<div class="detail-row"><span class="detail-label">所有者</span><span class="detail-value">${escHtml(prop.owner)}</span></div>` : ''}
+        ${prop.ownerContact ? `<div class="detail-row"><span class="detail-label">連絡先</span><span class="detail-value">${escHtml(prop.ownerContact)}</span></div>` : ''}
+      </div>
+
+      ${akiyaInfo}
+
+      ${prop.notes ? `
+      <div class="detail-section">
+        <h3>📝 備考</h3>
+        <p style="font-size:13px; color:#555; line-height:1.6;">${escHtml(prop.notes)}</p>
+      </div>
+      ` : ''}
+
+      <div class="detail-section">
+        <h3>📎 関連ファイル（Google Drive）</h3>
+        <div class="file-list">${filesHtml}</div>
+        <button class="btn btn-secondary btn-block" style="margin-top:12px;" onclick="showAddFileForm('${prop.id}')">
+          ＋ ファイルリンクを追加
+        </button>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="showEditForm('${prop.id}')">✏️ 編集</button>
+        <button class="btn btn-danger" onclick="deleteProperty('${prop.id}')">🗑 削除</button>
+      </div>
+
+      <p style="font-size:11px; color:#aaa; margin-top:16px;">
+        登録: ${new Date(prop.createdAt).toLocaleDateString('ja-JP')}<br>
+        更新: ${new Date(prop.updatedAt).toLocaleDateString('ja-JP')}
+      </p>
+    </div>
+  `;
+  openPanel(html);
+}
+
+// ============================================================
+// 物件編集
+// ============================================================
+function showEditForm(id) {
+  const prop = properties.find(p => p.id === id);
+  if (!prop) return;
+  editingId = id;
+
+  showAddForm(prop.lat, prop.lng);
+
+  // フォームに値をセット（少し待つ）
+  setTimeout(() => {
+    document.getElementById('f-name').value = prop.name || '';
+    document.getElementById('f-address').value = prop.address || '';
+    document.getElementById('f-isAkiya').value = prop.isAkiya ? '1' : '0';
+    toggleAkiyaDetails();
+    if (prop.isAkiya) {
+      const cond = document.getElementById('f-condition');
+      if (cond) cond.value = prop.condition || '';
+      const vs = document.getElementById('f-vacantSince');
+      if (vs) vs.value = prop.vacantSince || '';
+      const st = document.getElementById('f-structure');
+      if (st) st.value = prop.structure || '';
+      const by = document.getElementById('f-builtYear');
+      if (by) by.value = prop.builtYear || '';
+      const la = document.getElementById('f-landArea');
+      if (la) la.value = prop.landArea || '';
+      const ba = document.getElementById('f-buildingArea');
+      if (ba) ba.value = prop.buildingArea || '';
+    }
+    document.getElementById('f-owner').value = prop.owner || '';
+    document.getElementById('f-ownerContact').value = prop.ownerContact || '';
+    document.getElementById('f-notes').value = prop.notes || '';
+  }, 50);
+}
+
+// ============================================================
+// 物件削除
+// ============================================================
+function deleteProperty(id) {
+  if (!confirm('この物件を削除しますか？')) return;
+  properties = properties.filter(p => p.id !== id);
+  saveData(properties);
+  renderAllMarkers();
+  closePanel();
+  showToast('物件を削除しました');
+}
+
+// ============================================================
+// ファイル管理
+// ============================================================
+function showAddFileForm(propId) {
+  const formHtml = `
+    <div style="background:#f0f0f0; border-radius:10px; padding:16px; margin-top:12px;" id="add-file-form">
+      <div class="form-group">
+        <label>ファイル名</label>
+        <input type="text" id="ff-name" placeholder="例：登記簿謄本">
+      </div>
+      <div class="form-group">
+        <label>ファイル種類</label>
+        <select id="ff-type">
+          <option value="謄本">謄本</option>
+          <option value="公図">公図</option>
+          <option value="測量図">測量図</option>
+          <option value="写真">写真</option>
+          <option value="契約書">契約書</option>
+          <option value="その他">その他</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Google Drive URL</label>
+        <input type="text" id="ff-url" placeholder="https://drive.google.com/...">
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="addFile('${propId}')">追加</button>
+        <button class="btn btn-secondary" onclick="showDetail('${propId}')">キャンセル</button>
+      </div>
+    </div>
+  `;
+  const container = panel.querySelector('.file-list').parentElement;
+  const existingForm = document.getElementById('add-file-form');
+  if (existingForm) existingForm.remove();
+  container.insertAdjacentHTML('beforeend', formHtml);
+}
+
+function addFile(propId) {
+  const name = document.getElementById('ff-name').value.trim();
+  const type = document.getElementById('ff-type').value;
+  const url = document.getElementById('ff-url').value.trim();
+
+  if (!name || !url) {
+    showToast('ファイル名とURLを入力してください');
+    return;
+  }
+
+  const prop = properties.find(p => p.id === propId);
+  if (!prop) return;
+  if (!prop.files) prop.files = [];
+  prop.files.push({ name, type, url });
+  prop.updatedAt = new Date().toISOString();
+  saveData(properties);
+  showDetail(propId);
+  showToast('ファイルを追加しました');
+}
+
+function removeFile(propId, fileIdx) {
+  if (!confirm('このファイルリンクを削除しますか？')) return;
+  const prop = properties.find(p => p.id === propId);
+  if (!prop || !prop.files) return;
+  prop.files.splice(fileIdx, 1);
+  prop.updatedAt = new Date().toISOString();
+  saveData(properties);
+  showDetail(propId);
+  showToast('ファイルを削除しました');
+}
+
+// ============================================================
+// 物件一覧
+// ============================================================
+function showList(filter = '') {
+  const filtered = properties.filter(p => {
+    if (!filter) return true;
+    const q = filter.toLowerCase();
+    return (p.name || '').toLowerCase().includes(q) ||
+           (p.address || '').toLowerCase().includes(q) ||
+           (p.owner || '').toLowerCase().includes(q);
+  });
+
+  const cardsHtml = filtered.length > 0
+    ? filtered.map(p => `
+        <div class="property-card" onclick="showDetail('${p.id}'); map.setView([${p.lat}, ${p.lng}], 17);">
+          <div class="card-header">
+            <span class="card-title">${escHtml(p.name || '名称未設定')}</span>
+            <span class="card-badge ${p.isAkiya ? 'badge-akiya' : 'badge-active'}">
+              ${p.isAkiya ? '空き家' : '非空き家'}
+            </span>
+          </div>
+          <div class="card-address">${escHtml(p.address || '住所未設定')}</div>
+          <div class="card-meta">
+            ${p.owner ? '所有者: ' + escHtml(p.owner) : ''}
+            ${p.files && p.files.length > 0 ? ' · 📎' + p.files.length + '件' : ''}
+          </div>
+        </div>
+      `).join('')
+    : '<p style="color:#666; text-align:center; padding:40px 0;">物件が登録されていません</p>';
+
+  const html = `
+    <div class="panel-header">
+      <h2>📋 物件一覧（${filtered.length}件）</h2>
+      <button class="panel-close" onclick="closePanel()">✕</button>
+    </div>
+    <div class="panel-body">
+      ${cardsHtml}
+    </div>
+  `;
+  openPanel(html);
+}
+
+// ============================================================
+// 追加モード
+// ============================================================
+function setAddMode(on) {
+  addMode = on;
+  document.getElementById('btn-add').classList.toggle('active', on);
+  document.getElementById('map').style.cursor = on ? 'crosshair' : '';
+  if (on) showToast('地図をクリックして物件の位置を指定してください');
+}
+
+// ============================================================
+// データインポート・エクスポート
+// ============================================================
+function exportData() {
+  const blob = new Blob([JSON.stringify(properties, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `akiya_data_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('データをエクスポートしました');
+}
+
+function importData() {
+  document.getElementById('import-file').click();
+}
+
+document.getElementById('import-file').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      if (Array.isArray(data)) {
+        if (confirm(`${data.length}件のデータをインポートします。既存データに追加しますか？\n（「キャンセル」で既存データを置き換え）`)) {
+          properties = [...properties, ...data];
+        } else {
+          properties = data;
+        }
+        saveData(properties);
+        renderAllMarkers();
+        showToast(`${data.length}件のデータをインポートしました`);
+      }
+    } catch {
+      showToast('インポートに失敗しました。正しいJSONファイルを選択してください');
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
+// ============================================================
+// イベントリスナー
+// ============================================================
+map.on('click', (e) => {
+  if (addMode) {
+    showAddForm(e.latlng.lat, e.latlng.lng);
+    setAddMode(false);
+  }
+});
+
+document.getElementById('btn-add').addEventListener('click', () => setAddMode(!addMode));
+document.getElementById('btn-list').addEventListener('click', () => showList());
+document.getElementById('btn-export').addEventListener('click', exportData);
+document.getElementById('btn-import').addEventListener('click', importData);
+
+document.getElementById('search-input').addEventListener('input', (e) => {
+  const q = e.target.value.trim();
+  if (q) {
+    showList(q);
+  }
+});
+
+// ============================================================
+// ユーティリティ
+// ============================================================
+function escHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function showToast(msg) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2500);
+}
+
+// ============================================================
+// 初期描画
+// ============================================================
+renderAllMarkers();
+</script>
+</body>
+</html>
