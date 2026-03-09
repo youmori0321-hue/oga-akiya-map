@@ -223,6 +223,7 @@
   <button class="tool-btn" id="btn-list" title="物件一覧">☰</button>
   <button class="tool-btn" id="btn-export" title="データエクスポート">⬇</button>
   <button class="tool-btn" id="btn-import" title="データインポート">⬆</button>
+  <button class="tool-btn" id="btn-reload" title="データを再読み込み">🔄</button>
 </div>
 
 <!-- 検索バー -->
@@ -253,25 +254,86 @@
 
 <script>
 // ============================================================
-// データストア
+// データストア（Google Sheets 連携）
 // ============================================================
-const STORAGE_KEY = 'oga_akiya_map_data';
+// ↓↓↓ ここにGoogle Apps ScriptのウェブアプリURLを貼り付けてください ↓↓↓
+const GAS_API_URL = 'https://script.google.com/macros/s/AKfycby3MmAJALNLreu4LtLwRbfWfvrMCQ7f9NuLxBrELgklIKVx2litKCTmZxNdYkuW2ZQR7A/exec';
+// ↑↑↑ 例: 'https://script.google.com/macros/s/XXXXX/exec' ↑↑↑
 
-function loadData() {
+let properties = [];
+let markers = {};
+let addMode = false;
+let editingId = null;
+let isSyncing = false;
+
+// --- API通信 ---
+async function apiGet() {
+  if (!GAS_API_URL) { return loadLocal(); }
+  try {
+    showSyncStatus('読み込み中...');
+    const res = await fetch(GAS_API_URL);
+    const json = await res.json();
+    if (json.success) {
+      saveLocal(json.data); // ローカルキャッシュ更新
+      showSyncStatus('');
+      return json.data;
+    }
+    throw new Error(json.error);
+  } catch (err) {
+    console.error('API GET failed:', err);
+    showSyncStatus('オフライン（ローカルデータ）');
+    return loadLocal();
+  }
+}
+
+async function apiPost(body) {
+  if (!GAS_API_URL) { saveLocal(properties); return; }
+  try {
+    isSyncing = true;
+    showSyncStatus('保存中...');
+    await fetch(GAS_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify(body)
+    });
+    showSyncStatus('');
+  } catch (err) {
+    console.error('API POST failed:', err);
+    showSyncStatus('同期失敗（ローカル保存済み）');
+    saveLocal(properties);
+  } finally {
+    isSyncing = false;
+  }
+}
+
+// --- ローカルキャッシュ（オフライン用） ---
+const STORAGE_KEY = 'oga_akiya_map_data';
+function loadLocal() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : [];
   } catch { return []; }
 }
-
-function saveData(properties) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(properties));
+function saveLocal(data) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
-let properties = loadData();
-let markers = {};
-let addMode = false;
-let editingId = null;
+// --- 同期ステータス表示 ---
+function showSyncStatus(msg) {
+  let el = document.getElementById('sync-status');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'sync-status';
+    el.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:2000;font-size:12px;color:#888;background:rgba(255,255,255,0.9);padding:6px 14px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.1);border:1px solid #ddd;transition:opacity 0.3s;';
+    document.body.appendChild(el);
+  }
+  if (msg) {
+    el.textContent = '🔄 ' + msg;
+    el.style.opacity = '1';
+  } else {
+    el.style.opacity = '0';
+  }
+}
 
 // ============================================================
 // 地図初期化（男鹿駅付近）
@@ -447,7 +509,7 @@ function toggleAkiyaDetails() {
 // ============================================================
 // 物件保存
 // ============================================================
-function saveProperty() {
+async function saveProperty() {
   const name = document.getElementById('f-name').value.trim();
   const address = document.getElementById('f-address').value.trim();
   if (!name && !address) {
@@ -485,12 +547,15 @@ function saveProperty() {
     properties.push(prop);
   }
 
-  saveData(properties);
+  saveLocal(properties);
   renderAllMarkers();
   showDetail(prop.id);
   setAddMode(false);
   showToast(editingId ? '物件情報を更新しました' : '物件を登録しました');
   editingId = null;
+
+  // Google Sheetsに同期
+  await apiPost({ action: 'save', property: prop });
 }
 
 // ============================================================
@@ -616,13 +681,14 @@ function showEditForm(id) {
 // ============================================================
 // 物件削除
 // ============================================================
-function deleteProperty(id) {
+async function deleteProperty(id) {
   if (!confirm('この物件を削除しますか？')) return;
   properties = properties.filter(p => p.id !== id);
-  saveData(properties);
+  saveLocal(properties);
   renderAllMarkers();
   closePanel();
   showToast('物件を削除しました');
+  await apiPost({ action: 'delete', id: id });
 }
 
 // ============================================================
@@ -662,7 +728,7 @@ function showAddFileForm(propId) {
   container.insertAdjacentHTML('beforeend', formHtml);
 }
 
-function addFile(propId) {
+async function addFile(propId) {
   const name = document.getElementById('ff-name').value.trim();
   const type = document.getElementById('ff-type').value;
   const url = document.getElementById('ff-url').value.trim();
@@ -672,25 +738,28 @@ function addFile(propId) {
     return;
   }
 
+  const file = { name, type, url };
   const prop = properties.find(p => p.id === propId);
   if (!prop) return;
   if (!prop.files) prop.files = [];
-  prop.files.push({ name, type, url });
+  prop.files.push(file);
   prop.updatedAt = new Date().toISOString();
-  saveData(properties);
+  saveLocal(properties);
   showDetail(propId);
   showToast('ファイルを追加しました');
+  await apiPost({ action: 'addFile', propertyId: propId, file: file });
 }
 
-function removeFile(propId, fileIdx) {
+async function removeFile(propId, fileIdx) {
   if (!confirm('このファイルリンクを削除しますか？')) return;
   const prop = properties.find(p => p.id === propId);
   if (!prop || !prop.files) return;
   prop.files.splice(fileIdx, 1);
   prop.updatedAt = new Date().toISOString();
-  saveData(properties);
+  saveLocal(properties);
   showDetail(propId);
   showToast('ファイルを削除しました');
+  await apiPost({ action: 'removeFile', propertyId: propId, fileIndex: fileIdx });
 }
 
 // ============================================================
@@ -776,8 +845,15 @@ document.getElementById('import-file').addEventListener('change', (e) => {
         } else {
           properties = data;
         }
-        saveData(properties);
+        saveLocal(properties);
         renderAllMarkers();
+        // Google Sheetsにも各物件を同期
+        for (const p of properties) {
+          await apiPost({ action: 'save', property: p });
+          for (const f of (p.files || [])) {
+            await apiPost({ action: 'addFile', propertyId: p.id, file: f });
+          }
+        }
         showToast(`${data.length}件のデータをインポートしました`);
       }
     } catch {
@@ -827,9 +903,27 @@ function showToast(msg) {
 }
 
 // ============================================================
+// データ再読み込み
+// ============================================================
+async function reloadData() {
+  showToast('データを読み込み中...');
+  properties = await apiGet();
+  renderAllMarkers();
+  showToast(GAS_API_URL ? 'Google Sheetsからデータを読み込みました' : 'ローカルデータを読み込みました');
+}
+
+document.getElementById('btn-reload').addEventListener('click', reloadData);
+
+// ============================================================
 // 初期描画
 // ============================================================
-renderAllMarkers();
+(async () => {
+  properties = await apiGet();
+  renderAllMarkers();
+  if (!GAS_API_URL) {
+    showToast('⚠️ API未設定：ローカルモードで動作中');
+  }
+})();
 </script>
 </body>
 </html>
