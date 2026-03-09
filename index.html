@@ -698,7 +698,26 @@ function showAddFileForm(propId) {
   const formHtml = `
     <div style="background:#f0f0f0; border-radius:10px; padding:16px; margin-top:12px;" id="add-file-form">
       <div class="form-group">
-        <label>ファイル名</label>
+        <label>登録方法を選択</label>
+        <select id="ff-mode" onchange="toggleFileMode()">
+          <option value="upload">ファイルをアップロード（Google Driveに自動保存）</option>
+          <option value="url">Google Drive URLを直接入力</option>
+        </select>
+      </div>
+      <div id="ff-upload-section">
+        <div class="form-group">
+          <label>ファイルを選択</label>
+          <input type="file" id="ff-file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" style="padding:8px;">
+        </div>
+      </div>
+      <div id="ff-url-section" style="display:none;">
+        <div class="form-group">
+          <label>Google Drive URL</label>
+          <input type="text" id="ff-url" placeholder="https://drive.google.com/...">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>ファイル名（表示名）</label>
         <input type="text" id="ff-name" placeholder="例：登記簿謄本">
       </div>
       <div class="form-group">
@@ -712,13 +731,15 @@ function showAddFileForm(propId) {
           <option value="その他">その他</option>
         </select>
       </div>
-      <div class="form-group">
-        <label>Google Drive URL</label>
-        <input type="text" id="ff-url" placeholder="https://drive.google.com/...">
-      </div>
       <div class="btn-group">
-        <button class="btn btn-primary" onclick="addFile('${propId}')">追加</button>
+        <button class="btn btn-primary" id="ff-submit-btn" onclick="addFile('${propId}')">追加</button>
         <button class="btn btn-secondary" onclick="showDetail('${propId}')">キャンセル</button>
+      </div>
+      <div id="ff-progress" style="display:none; margin-top:12px; text-align:center;">
+        <div style="font-size:13px; color:#888;">🔄 アップロード中...</div>
+        <div style="height:4px; background:#e0e0e0; border-radius:2px; margin-top:8px; overflow:hidden;">
+          <div id="ff-progress-bar" style="height:100%; background:#d63031; width:0%; transition:width 0.3s;"></div>
+        </div>
       </div>
     </div>
   `;
@@ -726,28 +747,123 @@ function showAddFileForm(propId) {
   const existingForm = document.getElementById('add-file-form');
   if (existingForm) existingForm.remove();
   container.insertAdjacentHTML('beforeend', formHtml);
+
+  // ファイル選択時に自動でファイル名をセット
+  document.getElementById('ff-file').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file && !document.getElementById('ff-name').value) {
+      document.getElementById('ff-name').value = file.name.replace(/\.[^/.]+$/, '');
+    }
+  });
+}
+
+function toggleFileMode() {
+  const mode = document.getElementById('ff-mode').value;
+  document.getElementById('ff-upload-section').style.display = mode === 'upload' ? 'block' : 'none';
+  document.getElementById('ff-url-section').style.display = mode === 'url' ? 'block' : 'none';
 }
 
 async function addFile(propId) {
+  const mode = document.getElementById('ff-mode').value;
   const name = document.getElementById('ff-name').value.trim();
   const type = document.getElementById('ff-type').value;
-  const url = document.getElementById('ff-url').value.trim();
 
-  if (!name || !url) {
-    showToast('ファイル名とURLを入力してください');
+  if (!name) {
+    showToast('ファイル名を入力してください');
     return;
   }
 
-  const file = { name, type, url };
-  const prop = properties.find(p => p.id === propId);
-  if (!prop) return;
-  if (!prop.files) prop.files = [];
-  prop.files.push(file);
-  prop.updatedAt = new Date().toISOString();
-  saveLocal(properties);
-  showDetail(propId);
-  showToast('ファイルを追加しました');
-  await apiPost({ action: 'addFile', propertyId: propId, file: file });
+  if (mode === 'url') {
+    // --- URLモード（従来通り） ---
+    const url = document.getElementById('ff-url').value.trim();
+    if (!url) {
+      showToast('URLを入力してください');
+      return;
+    }
+    const file = { name, type, url };
+    const prop = properties.find(p => p.id === propId);
+    if (!prop) return;
+    if (!prop.files) prop.files = [];
+    prop.files.push(file);
+    prop.updatedAt = new Date().toISOString();
+    saveLocal(properties);
+    showDetail(propId);
+    showToast('ファイルを追加しました');
+    await apiPost({ action: 'addFile', propertyId: propId, file: file });
+
+  } else {
+    // --- アップロードモード ---
+    const fileInput = document.getElementById('ff-file');
+    const selectedFile = fileInput.files[0];
+    if (!selectedFile) {
+      showToast('ファイルを選択してください');
+      return;
+    }
+
+    // 10MB制限チェック
+    if (selectedFile.size > 10 * 1024 * 1024) {
+      showToast('ファイルサイズは10MB以下にしてください');
+      return;
+    }
+
+    // UIを更新
+    const submitBtn = document.getElementById('ff-submit-btn');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'アップロード中...';
+    document.getElementById('ff-progress').style.display = 'block';
+    document.getElementById('ff-progress-bar').style.width = '30%';
+
+    try {
+      // ファイルをBase64に変換
+      const base64 = await fileToBase64(selectedFile);
+      document.getElementById('ff-progress-bar').style.width = '60%';
+
+      // Google Driveにアップロード
+      const res = await fetch(GAS_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({
+          action: 'uploadFile',
+          propertyId: propId,
+          fileName: selectedFile.name,
+          fileType: type,
+          fileData: base64,
+          mimeType: selectedFile.type
+        })
+      });
+      const result = await res.json();
+      document.getElementById('ff-progress-bar').style.width = '100%';
+
+      if (result.success) {
+        const file = { name, type, url: result.fileUrl };
+        const prop = properties.find(p => p.id === propId);
+        if (!prop) return;
+        if (!prop.files) prop.files = [];
+        prop.files.push(file);
+        prop.updatedAt = new Date().toISOString();
+        saveLocal(properties);
+        showToast('ファイルをGoogle Driveにアップロードしました');
+        showDetail(propId);
+      } else {
+        showToast('アップロードに失敗しました: ' + (result.error || ''));
+      }
+    } catch (err) {
+      console.error('Upload failed:', err);
+      showToast('アップロードに失敗しました');
+    }
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // "data:xxx;base64,YYYY" → "YYYY" の部分だけ取得
+      resolve(reader.result.split(',')[1]);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 async function removeFile(propId, fileIdx) {
